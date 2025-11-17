@@ -1,0 +1,131 @@
+Create Controller :
+using Microsoft.AspNetCore.Mvc;
+using CleanArchitecture.Infrastructure.Notifications;
+
+[ApiController]
+[Route("api/[controller]")]
+public class NotificationsController : ControllerBase
+{
+    private readonly SseNotificationService _notificationService;
+
+    public NotificationsController(SseNotificationService notificationService)
+    {
+        _notificationService = notificationService;
+    }
+
+    [HttpGet("subscribe/{userId}")]
+    public async Task Subscribe(string userId, CancellationToken cancellationToken)
+    {
+        Response.Headers.Add("Content-Type", "text/event-stream");
+        Response.Headers.Add("Cache-Control", "no-cache");
+        Response.Headers.Add("Connection", "keep-alive");
+
+        _notificationService.RegisterClient(userId, Response);
+
+        try
+        {
+            // Keep connection alive
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(1000, cancellationToken);
+            }
+        }
+        finally
+        {
+            // Remove client on disconnect
+            _notificationService.AddUserToGroups(userId, new List<string>());
+        }
+    }
+}
+
+
+UserLoginHandler: 
+// After generating token and saving user devices
+var userRoutes = userDTO.Roles
+    .SelectMany(r => r.Routes?.OfType<RouteDTO>() ?? Enumerable.Empty<RouteDTO>())
+    .Select(route => route.Name)
+    .Distinct()
+    .ToList();
+
+if (userRoutes.Any())
+{
+    // Add user to "groups" in SSE service
+    await notificationService.AddUserToGroups(userDTO.Id.ToString(), userRoutes);
+}
+
+
+sendData:
+var payload = new Notification
+{
+    Title = "Complaint Update",
+    Message = $"Complaint (ID: {entry.Entity.Id}) status changed to {newStatus}.",
+    OccurredAt = DateTime.UtcNow,
+};
+
+// Notify users in "Complaints" group via SSE
+await notificationService.NotifyToGroup(payload, "Complaints");
+
+
+
+NotificationRepository:
+using System.Collections.Concurrent;
+using System.Text.Json;
+using CleanArchitecture.Application.Common.Interfaces;
+using CleanArchitecture.Domain.Notifications;
+using Microsoft.AspNetCore.Http;
+
+namespace CleanArchitecture.Infrastructure.Notifications
+{
+    public class SseNotificationService : INotificationService
+    {
+        // Map userId -> HttpResponse
+        private static readonly ConcurrentDictionary<string, HttpResponse> _userResponses = new();
+
+        // Map userId -> groups
+        private static readonly ConcurrentDictionary<string, List<string>> _userGroups = new();
+
+        // Register client when they connect
+        public void RegisterClient(string userId, HttpResponse response)
+        {
+            _userResponses[userId] = response;
+        }
+
+        public async Task NotifyUserAsync(string userId, Notification notification)
+        {
+            if (_userResponses.TryGetValue(userId, out var response))
+            {
+                var data = $"data: {JsonSerializer.Serialize(notification)}\n\n";
+                await response.WriteAsync(data);
+                await response.Body.FlushAsync();
+            }
+        }
+
+        public Task AddUserToGroups(string userId, List<string> groups)
+        {
+            _userGroups[userId] = groups;
+            return Task.CompletedTask;
+        }
+
+        public async Task NotifyToGroup(Notification notification, string groupName)
+        {
+            var targetUsers = _userGroups
+                .Where(u => u.Value.Contains(groupName))
+                .Select(u => u.Key);
+
+            foreach (var userId in targetUsers)
+            {
+                await NotifyUserAsync(userId, notification);
+            }
+        }
+    }
+}
+
+
+Client Side (JavaScript)
+const userId = "123"; // from login response or token
+const evtSource = new EventSource(`/api/notifications/subscribe/${userId}`);
+
+evtSource.onmessage = function(event) {
+    const notification = JSON.parse(event.data);
+    console.log("Notification received:", notification);
+};
