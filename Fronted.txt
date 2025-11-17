@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SignalR Notification Test</title>
+
+    <!-- You can use CDN OR download this file locally -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.7/signalr.min.js"></script>
+
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        #messages { border: 1px solid #ccc; padding: 10px; width: 400px; height: 200px; overflow-y: auto; }
+        input, button { padding: 8px; width: 300px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <h2>SignalR Notification Test</h2>
+
+    <label>User ID:</label>
+    <input type="text" id="userIdInput" placeholder="Enter your user id">
+
+    <br>
+    <button id="connectBtn">Connect to NotificationHub</button>
+
+    <h3>Received Notifications:</h3>
+    <div id="messages"></div>
+
+    <script>
+        let connection;
+
+        document.getElementById("connectBtn").addEventListener("click", async () => {
+            const userId = document.getElementById("userIdInput").value.trim();
+            if (!userId) {
+                alert("Enter user id first");
+                return;
+            }
+
+            // Build connection
+            connection = new signalR.HubConnectionBuilder()
+                .withUrl("https://localhost:7250/NotificationHub")
+                .build();
+
+            // When NotificationHub sends a notification
+            connection.on("ReceiveNotification", (data) => {
+                console.log("Msg Recevied")
+                const area = document.getElementById("messages");
+
+                const item = document.createElement("div");
+                item.textContent = JSON.stringify(data);
+
+                area.appendChild(item);
+                area.scrollTop = area.scrollHeight;
+            });
+
+            try {
+                await connection.start();
+                console.log("Connected to hub!");
+
+                // Register to groups after connection
+                await connection.invoke("RegisterToGroup",
+                    userId,
+                    ["Enquiry","Appointment", "Administrative","Complain"]
+                );
+
+                alert("Connected and registered to groups!");
+
+            } catch (err) {
+                console.error(err);
+                alert("Connection failed");
+            }
+        });
+    </script>
+
+</body>
+</html>
